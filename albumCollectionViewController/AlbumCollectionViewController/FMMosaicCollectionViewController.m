@@ -34,14 +34,9 @@
 static const CGFloat kFMHeaderFooterHeight  = 44.0;
 static const NSInteger kFMMosaicColumnCount = 1;
 
-typedef NS_ENUM(NSUInteger, AlbumMode) {
-    AlbumBrowseMode,
-    AlbumSelectedMode
-};
-
 @interface AssetWithMeta : NSObject
 
-@property (nonatomic, strong) PHAsset *asset;
+@property (nonatomic, strong) id asset;
 @property (nonatomic) BOOL isSelected;
 
 @end
@@ -49,14 +44,26 @@ typedef NS_ENUM(NSUInteger, AlbumMode) {
 @implementation AssetWithMeta
 @end
 
+@implementation fakeRemoteObj
++ (fakeRemoteObj*)initWithUrl:(NSString*)url AtDate:(NSDate*)creationDate {
+    
+    fakeRemoteObj * f = [[fakeRemoteObj alloc] init];
+    f.url = url;
+    f.creationDate = creationDate;
+    return f;
+}
+@end
+
 @interface FMMosaicCollectionViewController () <FMMosaicLayoutDelegate,PHPhotoLibraryChangeObserver>
 
 @property (nonatomic, strong) NSMutableArray *imagesAssetPerSection;
 @property (nonatomic, strong) NSMutableArray *titlePerSection;
 @property (nonatomic, strong) NSMutableArray *selectedAssets;
+@property (nonatomic, strong) NSArray *remoteImages;
 @property (nonatomic, strong) PHFetchResult *assetsFetchResults;
 @property (nonatomic, strong) PHCachingImageManager *imageManager;
-@property (nonatomic) AlbumMode mode;
+@property (nonatomic) AlbumMode albumMode;
+@property (nonatomic) ImageSourceMode imageSourceMode;
 
 @end
 
@@ -71,6 +78,8 @@ typedef NS_ENUM(NSUInteger, AlbumMode) {
     [super viewDidLoad];
     
     //configure collection view
+    self.collectionView.delegate = self;
+    self.collectionView.dataSource = self;
     self.collectionView.backgroundColor = [UIColor blackColor];
     [self.collectionView registerNib:[UINib nibWithNibName:@"FMHeaderView" bundle:nil]
           forSupplementaryViewOfKind:UICollectionElementKindSectionHeader
@@ -86,13 +95,21 @@ typedef NS_ENUM(NSUInteger, AlbumMode) {
     self.imagesAssetPerSection = [[NSMutableArray alloc] init];
     self.titlePerSection = [[NSMutableArray alloc] init];
 
-    self.assetsFetchResults = [PhotosUtility fetchUserPhotoCollectionsWithAlbumName:@"M"];
-    [self insertPhotosToSections];
-    
-    //monitor album change
-    [[PHPhotoLibrary sharedPhotoLibrary] registerChangeObserver:self];
-    
-    self.mode = AlbumBrowseMode;
+    if (self.imageSourceMode == RemoteImageUrlMode) {
+        [self.delegate fetchRemoteImageDataSources:^(NSArray *objects, NSError *error) {
+            self.remoteImages = objects;
+            [self insertPhotosToSections];
+        }];
+    } else {
+        self.assetsFetchResults = [PhotosUtility fetchUserPhotoCollectionsWithAlbumName:@"M"];
+        [self insertPhotosToSections];
+        
+        //monitor album change
+        [[PHPhotoLibrary sharedPhotoLibrary] registerChangeObserver:self];
+        
+    }
+
+    self.albumMode = AlbumBrowseMode;
     self.selectedAssets = [[NSMutableArray alloc] init];
     [self startSelectedMode];
 }
@@ -114,6 +131,15 @@ static CGSize AssetGridThumbnailSize;
     self.collectionView.scrollIndicatorInsets = insets;
 }
 
+//#pragma mark configure album mode
+//
+//-(void)setAlbumMode:(AlbumMode)albumMode {
+//    self.albumMode = albumMode;
+//}
+//-(void)setImageSourceMode:(ImageSourceMode)imageSourceMode {
+//    self.imageSourceMode = imageSourceMode;
+//}
+
 #pragma mark <UICollectionViewDataSource>
 
 - (NSInteger)numberOfSectionsInCollectionView:(UICollectionView *)collectionView {
@@ -132,6 +158,7 @@ static CGSize AssetGridThumbnailSize;
     //PHAsset *asset = self.assetsFetchResults[indexPath.item % self.assetsFetchResults.count];
     AssetWithMeta *am = self.imagesAssetPerSection[indexPath.section][indexPath.item];
     // Determine the size of the thumbnails to request from the PHCachingImageManager
+    if (self.imageSourceMode == LocalAlbumMode) {
     CGFloat scale = 1;
     CGSize cellSize = ((FMMosaicLayout*)self.collectionViewLayout).smallCellSize; //((UICollectionViewFlowLayout *)self.collectionViewLayout).itemSize;
     AssetGridThumbnailSize = CGSizeMake(cellSize.width * scale, cellSize.height * scale);
@@ -145,6 +172,13 @@ static CGSize AssetGridThumbnailSize;
 
                                       cell.imageView.image = result;
                               }];
+    }
+    if (self.imageSourceMode == RemoteImageUrlMode) {
+        fakeRemoteObj *f = am.asset;
+        [NSURLConnection sendAsynchronousRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:f.url]] queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
+            cell.imageView.image = [UIImage imageWithData:data];
+        }];
+    }
     if (am.isSelected)
         [cell setSelectedEffect];
     else
@@ -154,8 +188,7 @@ static CGSize AssetGridThumbnailSize;
 }
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath
 {
-    NSLog(@"[%ld]",(long)indexPath.row);
-    if (self.mode == AlbumSelectedMode) {
+    if (self.albumMode == AlbumSelectedMode) {
         FMMosaicCellView *cell = (FMMosaicCellView*)[collectionView cellForItemAtIndexPath:indexPath];
         AssetWithMeta *am = self.imagesAssetPerSection[indexPath.section][indexPath.item];
         if (![self.selectedAssets containsObject:am]) {
@@ -171,15 +204,15 @@ static CGSize AssetGridThumbnailSize;
     }
     NSLog(@"seletc:%@ count:%lu",self.selectedAssets,(unsigned long)self.selectedAssets.count);
     
-    if (self.selectedAssets.count > 2)
-    {
-        NSMutableArray *asset_list = [[NSMutableArray alloc] init];
-        for (AssetWithMeta *am in self.selectedAssets) {
-            [asset_list addObject:am.asset];
-        }
-        [self deletePhotoWithAssets:asset_list];
-        [self stopSelectedMode];
-    }
+//    if (self.selectedAssets.count > 2)
+//    {
+//        NSMutableArray *asset_list = [[NSMutableArray alloc] init];
+//        for (AssetWithMeta *am in self.selectedAssets) {
+//            [asset_list addObject:am.asset];
+//        }
+//        [self deletePhotoWithAssets:asset_list];
+//        [self stopSelectedMode];
+//    }
 }
 - (UICollectionReusableView *)collectionView:(UICollectionView *)collectionView
            viewForSupplementaryElementOfKind:(NSString *)kind atIndexPath:(NSIndexPath *)indexPath {
@@ -210,32 +243,62 @@ static CGSize AssetGridThumbnailSize;
     [self.imagesAssetPerSection removeAllObjects];
     [self.titlePerSection removeAllObjects];
     
-    NSString *last_asset_date = nil;
-    for (PHAsset *asset in self.assetsFetchResults) {
+    if (self.imageSourceMode == RemoteImageUrlMode) {
+        NSString *last_asset_date = nil;
+        for (fakeRemoteObj *asset in self.remoteImages) {
 
-        //enumerate assets already sort by creation date
-        //seperate asset by date for each sections
+            //enumerate assets already sort by creation date
+            //seperate asset by date for each sections
 
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"dd,MMM YYYY"];
-        NSString *date_string = [formatter stringFromDate:asset.creationDate];
-        AssetWithMeta *am = [[AssetWithMeta alloc] init];
-        am.asset = asset;
-        am.isSelected = FALSE;
+            NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+            [formatter setDateFormat:@"dd,MMM YYYY"];
+            NSString *date_string = [formatter stringFromDate:asset.creationDate];
+            AssetWithMeta *am = [[AssetWithMeta alloc] init];
+            am.asset = asset;
+            am.isSelected = FALSE;
 
-        //create new section if date is different from previous assets
-        //latest date on the top
-        if (![date_string isEqualToString:last_asset_date]) {
-            [self.titlePerSection insertObject:date_string atIndex:0];
-            NSMutableArray *list = [[NSMutableArray alloc] init];
-            [list addObject:am];
-            [self.imagesAssetPerSection insertObject:list atIndex:0];
-            last_asset_date = date_string;
-        } else {
-            NSUInteger index = self.imagesAssetPerSection.count - 1;
-            [((NSMutableArray*)self.imagesAssetPerSection[index]) addObject:am];
+            //create new section if date is different from previous assets
+            //latest date on the top
+            if (![date_string isEqualToString:last_asset_date]) {
+                [self.titlePerSection insertObject:date_string atIndex:0];
+                NSMutableArray *list = [[NSMutableArray alloc] init];
+                [list addObject:am];
+                [self.imagesAssetPerSection insertObject:list atIndex:0];
+                last_asset_date = date_string;
+            } else {
+                [((NSMutableArray*)self.imagesAssetPerSection[0]) addObject:am];
+            }
+        };
+    }
+    
+    if (self.imageSourceMode == LocalAlbumMode) {
+        NSString *last_asset_date = nil;
+        for (PHAsset *asset in self.assetsFetchResults) {
+
+            //enumerate assets already sort by creation date
+            //seperate asset by date for each sections
+
+            NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+            [formatter setDateFormat:@"dd,MMM YYYY"];
+            NSString *date_string = [formatter stringFromDate:asset.creationDate];
+            AssetWithMeta *am = [[AssetWithMeta alloc] init];
+            am.asset = asset;
+            am.isSelected = FALSE;
+
+            //create new section if date is different from previous assets
+            //latest date on the top
+            if (![date_string isEqualToString:last_asset_date]) {
+                [self.titlePerSection insertObject:date_string atIndex:0];
+                NSMutableArray *list = [[NSMutableArray alloc] init];
+                [list addObject:am];
+                [self.imagesAssetPerSection insertObject:list atIndex:0];
+                last_asset_date = date_string;
+            } else {
+                NSUInteger index = self.imagesAssetPerSection.count - 1;
+                [((NSMutableArray*)self.imagesAssetPerSection[index]) addObject:am];
+            }
         }
-    };
+    }
 }
 
 -(void)deletePhotoWithAssets:(NSArray*)deleteAssets {
@@ -253,12 +316,12 @@ static CGSize AssetGridThumbnailSize;
 #pragma mark selected mode
 
 -(void)startSelectedMode {
-    self.mode = AlbumSelectedMode;
+    self.albumMode = AlbumSelectedMode;
 }
 
 -(void)stopSelectedMode {
     
-    self.mode = AlbumBrowseMode;
+    self.albumMode = AlbumBrowseMode;
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.collectionView reloadData];
     });
@@ -286,7 +349,7 @@ static CGSize AssetGridThumbnailSize;
 
 - (UIEdgeInsets)collectionView:(UICollectionView *)collectionView layout:(FMMosaicLayout *)collectionViewLayout
         insetForSectionAtIndex:(NSInteger)section {
-    return UIEdgeInsetsMake(5.0, 5.0, 5.0, 5.0);
+    return UIEdgeInsetsMake(2.0, 2.0, 2.0, 2.0);
 }
 
 - (CGFloat)collectionView:(UICollectionView *)collectionView layout:(FMMosaicLayout *)collectionViewLayout
@@ -362,6 +425,36 @@ static CGSize AssetGridThumbnailSize;
         
         //[self resetCachedAssets];
     });
+}
+
+#pragma mark - Status Bar
+
+-(void)clickSelectedButton {
+    [self startSelectedMode];
+}
+-(void)clickCancelButton {
+    [self stopSelectedMode];
+}
+-(void)clickDeleteLocalImagesButton {
+    if (self.selectedAssets.count > 0)
+    {
+        NSMutableArray *asset_list = [[NSMutableArray alloc] init];
+        for (AssetWithMeta *am in self.selectedAssets) {
+            [asset_list addObject:am.asset];
+        }
+        [self deletePhotoWithAssets:asset_list];
+        [self stopSelectedMode];
+    }
+}
+-(NSArray*)getSeletedItems {
+    NSMutableArray *asset_list = [[NSMutableArray alloc] init];
+    if (self.selectedAssets.count > 0)
+    {
+        for (AssetWithMeta *am in self.selectedAssets) {
+            [asset_list addObject:am.asset];
+        }
+    }
+    return asset_list;
 }
 
 #pragma mark - Status Bar

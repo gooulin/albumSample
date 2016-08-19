@@ -24,7 +24,38 @@
 // THE SOFTWARE.
 
 #import <UIKit/UIKit.h>
+typedef void(^FetchRemoteImagesCompleteHandle)(NSArray *objects, NSError *error);
+
+typedef NS_ENUM(NSUInteger, AlbumMode) {
+    AlbumBrowseMode,
+    AlbumSelectedMode
+};
+
+typedef NS_ENUM(NSUInteger, ImageSourceMode) {
+    LocalAlbumMode,
+    RemoteImageUrlMode
+};
+
+@interface fakeRemoteObj : NSObject
+
+@property (nonatomic, strong) NSString *url;
+@property (nonatomic, strong) NSDate *creationDate;
++ (fakeRemoteObj*)initWithUrl:(NSString*)url AtDate:(NSDate*)creationDate;
+@end
+
+@protocol FMMosaicCollectionViewDelegate <NSObject>
+-(void)fetchRemoteImageDataSources:(FetchRemoteImagesCompleteHandle)cb;
+@end
 
 @interface FMMosaicCollectionViewController : UICollectionViewController
+@property (nonatomic, weak) id<FMMosaicCollectionViewDelegate> delegate;
 
+-(void)setAlbumMode:(AlbumMode)albumMode;
+-(void)setImageSourceMode:(ImageSourceMode)imageSourceMode;
+
+// For Action button
+-(void)clickSelectedButton;
+-(void)clickCancelButton;
+-(void)clickDeleteLocalImagesButton;
+-(NSArray*)getSeletedItems;
 @end

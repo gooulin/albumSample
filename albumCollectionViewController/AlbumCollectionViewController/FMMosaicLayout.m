@@ -111,6 +111,9 @@ static const BOOL kFMDefaultFooterShouldOverlayContent = NO;
             NSInteger indexOfShortestColumn = [self indexOfShortestColumnInSection:sectionIndex];
             UICollectionViewLayoutAttributes *layoutAttributes = [self addSmallMosaicLayoutAttributesForIndexPath:smallMosaicCellIndexPathsBuffer[0]
                                                                                                          inColumn:indexOfShortestColumn bufferIndex:0];
+            if (smallMosaicCellIndexPathsBuffer.count == 2)
+                [self addSmallMosaicLayoutAttributesForIndexPath:smallMosaicCellIndexPathsBuffer[1]
+                                                        inColumn:indexOfShortestColumn bufferIndex:1];
             
             // Add to small cells to shortest column, and recalculate column height now that they've been added
             CGFloat columnHeight = [self.columnHeightsPerSection[sectionIndex][indexOfShortestColumn] floatValue];
